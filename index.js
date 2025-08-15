@@ -4,7 +4,7 @@ const path = require('path');
 const express = require('express');
 require('dotenv').config();
 
-// ====== Express サーバー（Render常時稼働対策） ======
+// ====== Expressサーバー（Render/Replit常時稼働対策） ======
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running!'));
 app.listen(process.env.PORT || 3000, () => {
@@ -16,12 +16,16 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
 
+// ====== データファイル ======
 const bannedWordsPath = path.join(__dirname, 'bannedWords.json');
 const warningsPath = path.join(__dirname, 'warnings.json');
+const logConfigPath = path.join(__dirname, 'logConfig.json');
+
 const bannedWords = fs.readJsonSync(bannedWordsPath);
 let warnings = fs.readJsonSync(warningsPath);
+let logConfig = fs.readJsonSync(logConfigPath);
 
-// ====== スラッシュコマンド定義 ======
+// ====== スラッシュコマンド ======
 const commands = [
   new SlashCommandBuilder()
     .setName('ticket')
@@ -50,10 +54,20 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('stats')
-    .setDescription('サーバー統計を表示します')
+    .setDescription('サーバー統計を表示します'),
+
+  new SlashCommandBuilder()
+    .setName('setlog')
+    .setDescription('ログチャンネルを設定します')
+    .addChannelOption(opt =>
+      opt.setName('channel')
+        .setDescription('ログを送信するチャンネル')
+        .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
-// ====== Bot 起動時 ======
+// ====== Bot起動 ======
 client.once('ready', async () => {
   console.log(`✅ ログイン完了: ${client.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -65,14 +79,15 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  // 禁止ワード検出
+  // 禁止ワードチェック
   for (const word of bannedWords) {
     if (message.content.includes(word)) {
       await message.delete().catch(() => {});
       warnings[message.author.id] = (warnings[message.author.id] || 0) + 1;
       fs.writeJsonSync(warningsPath, warnings, { spaces: 2 });
 
-      const logChannel = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
+      const logChannelId = logConfig[message.guild.id];
+      const logChannel = logChannelId ? client.channels.cache.get(logChannelId) : null;
       if (logChannel) {
         logChannel.send(`🚫 ${message.author.tag} が禁止ワード「${word}」を使用しました。（警告 ${warnings[message.author.id]} 回）`);
       }
@@ -94,7 +109,7 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// ====== スラッシュコマンド処理 ======
+// ====== コマンド処理 ======
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -143,7 +158,13 @@ client.on('interactionCreate', async (interaction) => {
     const guild = interaction.guild;
     await interaction.reply(`📊 メンバー数: ${guild.memberCount}`);
   }
+
+  if (interaction.commandName === 'setlog') {
+    const channel = interaction.options.getChannel('channel');
+    logConfig[interaction.guild.id] = channel.id;
+    fs.writeJsonSync(logConfigPath, logConfig, { spaces: 2 });
+    await interaction.reply(`✅ ログチャンネルを ${channel} に設定しました。`);
+  }
 });
 
 client.login(process.env.DISCORD_TOKEN);
-
